@@ -12,12 +12,11 @@ import pandas as pd
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-o', '--output', type=str, required=True)
     parser.add_argument('--user_id', type=int, required=True)
     parser.add_argument('-k', type=int, default=10)
     parser.add_argument('--use_checkpoints', action='store_true')
     args = parser.parse_args()
-    out_path, user, k, checkpoints = args.output, args.user_id, args.k, args.use_checkpoints
+    user, k, checkpoints = args.user_id, args.k, args.use_checkpoints
     data = load_movielens('100k')
     model = WideDeepModel(data, split_ratio=0.9)
     
@@ -31,5 +30,6 @@ if __name__ == '__main__':
     result = pd.merge(topk_items, titles, how="inner", on="itemID").drop_duplicates('itemID').reset_index(drop=True)
     os.makedirs(Path(__file__).parent / 'results', exist_ok=True)
     result.to_csv(Path(__file__).parent / 'results' / f'top-{k}_{user}.csv', sep='|', header=True, index=False)
-    print(metrics)
+    _, rating_metrics = model.rate()
+    print(metrics, rating_metrics)
     

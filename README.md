@@ -13,6 +13,16 @@ Your assignment is to create a recommender system of movies for users:
 
 ## Usage
 
-First, you need to install all dependenices
+First, you need to install all dependencies. In order to do this, you can run the following command:
+```bash
+pip install -r requirements.txt
+```
 
+Evalution is done using `evaluate.py` script.
+```bash
+python ./benchmark/evaluate.py --user_id <DESIRED USER ID> -k <TOP K RECOMMENDATIONS> [--use_checkpoints]
+```
+If `--use_checkpoints` flag is set, then the checkpoints from `models/wide_deep` will be used for inference. Otherwise, the model will be continue training from a checkpoint or start training from a scratch.
+
+All generated responses are stored in `benchmark/results`.
 
