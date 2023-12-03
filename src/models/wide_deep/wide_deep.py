@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import scrapbook as sb
+import matplotlib.pyplot as plt
 from tempfile import TemporaryDirectory
 from recommenders.utils import tf_utils, gpu_utils, plot
 import recommenders.evaluation.python_evaluation as evaluator
@@ -19,33 +20,35 @@ from recommenders.utils.constants import (
     SEED
 )
 from pathlib import Path
-tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.INFO)
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.FATAL)
 
 class WideDeepModel:
     #### Hyperparameters
     TOP_K = 10
     RANKING_METRICS = [
-    evaluator.ndcg_at_k.__name__,
-    evaluator.precision_at_k.__name__,
+        evaluator.ndcg_at_k.__name__,
+        evaluator.precision_at_k.__name__,
+        evaluator.map_at_k.__name__,
+        evaluator.recall_at_k.__name__
     ]
     RATING_METRICS = [
         evaluator.rmse.__name__,
         evaluator.mae.__name__,
-    ]
+    ]   
     MODEL_DIR = Path(__file__).parent.parent.parent.parent / 'models' / 'wide_deep'
     MODEL_TYPE = "wide_deep"
-    STEPS = 100  # Number of batches to train
+    STEPS = 10000  # Number of batches to train
     BATCH_SIZE = 32
     EVALUATE_WHILE_TRAINING = True
     # Wide (linear) model hyperparameters
     LINEAR_OPTIMIZER = "adagrad"
-    LINEAR_OPTIMIZER_LR = 0.0621  # Learning rate
+    LINEAR_OPTIMIZER_LR = 3e-3  # Learning rate
     LINEAR_L1_REG = 0.0           # Regularization rate for FtrlOptimizer
     LINEAR_L2_REG = 0.0
     LINEAR_MOMENTUM = 0.0         # Momentum for MomentumOptimizer or RMSPropOptimizer
     # DNN model hyperparameters
     DNN_OPTIMIZER = "adadelta"
-    DNN_OPTIMIZER_LR = 0.1
+    DNN_OPTIMIZER_LR = 2e-2
     DNN_L1_REG = 0.0           # Regularization rate for FtrlOptimizer
     DNN_L2_REG = 0.0
     DNN_MOMENTUM = 0.0         # Momentum for MomentumOptimizer or RMSPropOptimizer
@@ -62,7 +65,8 @@ class WideDeepModel:
     RANDOM_SEED = SEED
 
     def __init__(self, data, split_ratio=0.8) -> None:
-        self.train, self.test = python_random_split(data, ratio=split_ratio, seed=self.RANDOM_SEED)
+        print(self.MODEL_DIR)
+        self.train_set, self.test_set = python_random_split(data, ratio=split_ratio, seed=self.RANDOM_SEED)
         # Data is needed on initialization to build feature columns
         if ITEM_FEAT_COL is None:
             self.items = data.drop_duplicates(ITEM_COL)[[ITEM_COL]].reset_index(drop=True)
@@ -90,15 +94,15 @@ class WideDeepModel:
             TMP_DIR = TemporaryDirectory()
             self.model_dir = TMP_DIR.name
         else:
-            if os.path.exists(str(self.MODEL_DIR)) and os.listdir(str(self.MODEL_DIR)):
-                raise ValueError(
-                    "Model exists in {}. Use different directory name or "
-                    "remove the existing checkpoint files first".format(str(self.MODEL_DIR))
-                )
+            # if os.path.exists(str(self.MODEL_DIR)) and os.listdir(str(self.MODEL_DIR)):
+            #     raise ValueError(
+            #         "Model exists in {}. Use different directory name or "
+            #         "remove the existing checkpoint files first".format(str(self.MODEL_DIR))
+            #     )
             TMP_DIR = None
             self.model_dir = str(self.MODEL_DIR)
 
-        self.save_checkpoints_steps = max(1, self.STEPS // 5)
+        self.save_checkpoints_steps = max(1, self.STEPS // 10)
         self.model = wide_deep.build_model(
             model_dir=self.model_dir,
             wide_columns=self.wide_columns,
@@ -134,7 +138,7 @@ class WideDeepModel:
             item_df=self.items,
             user_col=USER_COL,
             item_col=ITEM_COL,
-            user_item_filter_df=self.train,  # Remove seen items
+            user_item_filter_df=self.train_set,  # Remove seen items
             shuffle=True,
             seed=self.RANDOM_SEED
         )
@@ -151,9 +155,9 @@ class WideDeepModel:
                         tf_utils.evaluation_log_hook(
                             self.model,
                             logger=evaluation_logger,
-                            true_df=self.test,
+                            true_df=self.test_set,
                             y_col=RATING_COL,
-                            eval_df=self.ranking_pool if metrics==self.RANKING_METRICS else self.test.drop(RATING_COL, axis=1),
+                            eval_df=self.ranking_pool if metrics==self.RANKING_METRICS else self.test_set.drop(RATING_COL, axis=1),
                             every_n_iter=self.save_checkpoints_steps,
                             model_dir=self.model_dir,
                             eval_fns=[evaluator.metrics[m] for m in metrics],
@@ -163,23 +167,23 @@ class WideDeepModel:
 
         # Define training input (sample feeding) function
         self.train_fn = tf_utils.pandas_input_fn(
-            df=self.train,
+            df=self.train_set,
             y_col=RATING_COL,
-            batch_size=self.BATCH_SIZE,
+            batch_size=batch_size,
             num_epochs=None,  # We use steps=TRAIN_STEPS instead.
             shuffle=True,
             seed=self.RANDOM_SEED,
         )
         print(
             "Training steps = {}, Batch size = {} (num epochs = {})"
-            .format(self.STEPS, self.BATCH_SIZE, (self.STEPS*self.BATCH_SIZE)//len(self.train))
+            .format(num_steps, batch_size, (num_steps * batch_size)//len(self.train_set))
         )
 
         try:
             self.model.train(
                 input_fn=self.train_fn,
                 hooks=hooks,
-                steps=self.STEPS
+                steps=num_steps
             )
         except tf.train.NanLossDuringTrainingError:
             import warnings
@@ -199,9 +203,9 @@ class WideDeepModel:
                     y_name=m,
                     subplot=(math.ceil(len(logs)/2), 2, i),
                 )
-            plot.savefig(str(Path(__file__).parent.parent.parent.parent / 'reports' / 'figures' / 'training_loss.png'))
+            plt.savefig(str(Path(__file__).parent.parent.parent.parent / 'reports' / 'figures' / 'training_loss.png'))
 
-    def top_k(self, k=TOP_K):
+    def predict(self, k=TOP_K) -> tuple[pd.DataFrame, dict]:
         if len(self.RANKING_METRICS) > 0:
             predictions = list(self.model.predict(input_fn=tf_utils.pandas_input_fn(df=self.ranking_pool)))
             prediction_df = self.ranking_pool.copy()
@@ -209,10 +213,23 @@ class WideDeepModel:
 
             ranking_results = {}
             for m in self.RANKING_METRICS:
-                result = evaluator.metrics[m](self.test, prediction_df, **{**self.cols, 'k': k})
+                result = evaluator.metrics[m](self.test_set, prediction_df, **{**self.cols, 'k': k})
                 sb.glue(m, result)
                 ranking_results[m] = result
             return prediction_df, ranking_results
+        
+    def rate(self) -> tuple[pd.DataFrame, dict]:
+        if len(self.RATING_METRICS) > 0:
+            predictions = list(self.model.predict(input_fn=tf_utils.pandas_input_fn(df=self.test_set)))
+            prediction_df = self.test_set.drop(RATING_COL, axis=1)
+            prediction_df[PREDICT_COL] = [p['predictions'][0] for p in predictions]
+            
+            rating_results = {}
+            for m in self.RATING_METRICS:
+                result = evaluator.metrics[m](self.test_set, prediction_df, **self.cols)
+                sb.glue(m, result)
+                rating_results[m] = result
+            return prediction_df, rating_results
 
     def save(self, path):
         os.makedirs(path, exist_ok=True)
@@ -220,7 +237,7 @@ class WideDeepModel:
             model=self.model,
             train_input_fn=self.train_fn,
             eval_input_fn=tf_utils.pandas_input_fn(
-                df=self.test, y_col=RATING_COL
+                df=self.test_set, y_col=RATING_COL
             ),
             tf_feat_cols=self.wide_columns + self.deep_columns,
             base_dir=path
